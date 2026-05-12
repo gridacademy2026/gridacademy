@@ -1,76 +1,64 @@
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).end();
-  
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).json({ text: 'API key not configured' });
+  
+  if (!apiKey) {
+    return res.status(200).json({ 
+      text: 'Configuration error: API key missing. Add GEMINI_API_KEY to Vercel environment variables.' 
+    });
+  }
 
   try {
     const { messages, system } = req.body;
-    
-    // Build conversation with system prompt included in first message
-    const contents = [];
-    if (system) {
-      contents.push({
-        role: 'user',
-        parts: [{ text: `Instructions: ${system}\n\nUser: ${messages[0]?.content || ''}` }]
-      });
-      contents.push({
-        role: 'model', 
-        parts: [{ text: 'Understood. I will follow these instructions.' }]
-      });
-      // Add remaining messages
-      messages.slice(1).forEach(m => {
-        contents.push({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }]
-        });
-      });
-    } else {
-      messages.forEach(m => {
-        contents.push({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }]
-        });
-      });
-    }
 
-    const response = await fetch(
+    const allMessages = [];
+    
+    messages.forEach((m, idx) => {
+      allMessages.push({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ 
+          text: idx === 0 && system 
+            ? `${system}\n\n${m.content}` 
+            : m.content 
+        }]
+      });
+    });
+
+    const geminiRes = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents,
+          contents: allMessages,
           generationConfig: {
-            maxOutputTokens: 1000,
+            maxOutputTokens: 800,
             temperature: 0.7
           }
         })
       }
     );
 
-    const data = await response.json();
-    
-    // Handle API errors
+    const data = await geminiRes.json();
+
     if (data.error) {
-      return res.status(500).json({ 
-        text: `API Error: ${data.error.message}` 
-      });
-    }
-
-    // Extract text from response
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    
-    if (!text) {
-      // Return full response for debugging
       return res.status(200).json({ 
-        text: `Debug: ${JSON.stringify(data).slice(0, 200)}` 
+        text: `Gemini error: ${data.error.message}` 
       });
     }
 
-    return res.status(200).json({ text });
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
-  } catch (error) {
-    return res.status(500).json({ text: `Error: ${error.message}` });
+    return res.status(200).json({ 
+      text: text || 'Gemini returned empty response. Please try again.' 
+    });
+
+  } catch (err) {
+    return res.status(200).json({ 
+      text: `Server error: ${err.message}` 
+    });
   }
 }
